@@ -1,5 +1,4 @@
-import discord, asyncio, requests, openai, configparser
-import yt_dlp as youtube_dl
+import discord, asyncio, requests, openai, configparser, os, yt_dlp as youtube_dl
 from youtubesearchpython import VideosSearch
 
 # quality and format settings for audio conversion using FFMpeg
@@ -14,13 +13,9 @@ ydl_opts = {
 
 config = configparser.ConfigParser()
 config.read('config.ini')
-intents = discord.Intents.default()
-intents.message_content = True
+intents = discord.Intents.all()
 client = discord.Client(intents=intents)
-voice_client = None
-pause = False
-queue = asyncio.Queue()
-queue_list = []
+voice_client, pause, queue, queue_list = None, False, asyncio.Queue(), []
 ninjaAPI_key = str(config.get('ninjaAPI', 'key'))
 openai.api_key = str(config.get('OpenAPI', 'key'))
 bot_key = str(config.get('discord_token', 'key'))
@@ -58,14 +53,10 @@ def get_image(prompt):
 
 def get_gpt(prompt):
     global openai_key
-    response = openai.Completion.create(
-    engine="text-davinci-003",
-    prompt=prompt,
-    max_tokens=100,
-    n=1,
-    stop=None,
-    temperature=0.5)
-    return response["choices"][0]["text"]
+    response = openai.ChatCompletion.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": prompt}])
+    return (response.choices[0].message["content"])
 
 def get_search(word_to_search):
     global urls_of_search
@@ -88,7 +79,7 @@ async def play_song(message, digit = False):
             voice_client = await voice_channel.connect()
         queue_list.append(message.content.split()[1])
         if voice_client.is_playing() is False:
-            await play_next_song(voice_client)
+            await play_next_song(voice_client, message)
     elif digit:
         if voice_client is None:
             author = message.author
@@ -96,16 +87,16 @@ async def play_song(message, digit = False):
             voice_client = await voice_channel.connect()
         queue_list.append(urls_of_search[int(message.content[6:])-1])
         if voice_client.is_playing() is False:
-            await play_next_song(voice_client)
+            await play_next_song(voice_client, message)
 
-
-async def play_next_song(vc):
+async def play_next_song(vc, message):
     global queue_list
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
         url = queue_list[0]
         queue_list.pop(0)
         info = ydl.extract_info(url, download=False)
-        player = vc.play(discord.FFmpegOpusAudio(info['url']), after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(voice_client), client.loop))    
+        player = vc.play(discord.FFmpegOpusAudio(info['url']), after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(voice_client, message), client.loop)) 
+        await message.channel.send(f"Now playing {info.get('title', None)}")
 
 @client.event
 async def on_ready():
@@ -113,7 +104,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    global voice_client, queue_list, pause, queue, fact, urls
+    global voice_client, queue_list, pause, queue, fact
     if message.content.startswith('!play'):
             if message.author.voice:
                 if not message.content[6:].isdigit():
@@ -131,16 +122,16 @@ async def on_message(message):
             pause = False
     if message.content == "!skip":
         voice_client.stop()
-        await play_next_song(voice_client)
+        await play_next_song(voice_client, message)
     if message.content == "!queue":
-        if queue_list:    
-            await message.channel.send("Songs in the queue:\n")
+        if queue_list:
+            que = "Songs in the queue:\n"
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                for i in queue_list:
-                    info = ydl.extract_info(i, download=False)
+                for i, e in enumerate(queue_list):
+                    info = ydl.extract_info(e, download=False)
                     title = info.get('title', None)
-                    information = ("{title}\n").format(title=title)
-                    await message.channel.send(information)
+                    que += f"{i+1}. {title}\n"
+                await message.channel.send(que)
         else:
             await message.channel.send("The queue is empty. To play a song, type !play followed by the URL")
     if message.content == "!fact":
@@ -161,8 +152,10 @@ async def on_message(message):
     if message.content.startswith("!more"):
         await message.channel.send(get_gpt(fact))
     if message.content.startswith("!search"):
+        sear = ""
         for i, e in enumerate(get_search(message.content[8:])):
-            await message.channel.send(f"{i+1}. {e}")
+            sear += f"{i+1}. {e}\n"
+        await message.channel.send(sear)
         
 
 
